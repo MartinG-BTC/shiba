@@ -12,29 +12,27 @@ const OXR        = require('./OpenExchangeRates');
 const fiatRatesCache = new Cache({
   // Cache fiat exchange rates for 1 hour.
   maxAge: 1000 * 60 * 60,
-  load: function*() {
+  load: function() {
     debug('Downloading fiat exchange rates');
     // Oxr free plan only allows USD as the base currency.
-    return yield* OXR.getLatest({
+    return OXR.getLatest({
       base: 'USD',
       appId: Config.OXR_APP_ID
     });
   }
 });
 
-function* getFiatRates() {
+async function getFiatRates() {
   debug('Getting fiat rates');
-  var data = yield* fiatRatesCache.get('');
+  var data = await fiatRatesCache.get('');
   debug('Updating fiat rate info');
   return data.rates;
 }
 
-function* getRates() {
+async function getRates() {
   debug('Getting rates');
 
-  let val    = yield [getFiatRates, Bitstamp.getAveragePrice];
-  let rates  = val[0];
-  let usdBtc = val[1];
+  const [ rates, usdBtc ] = await Promise.all([getFiatRates(), Bitstamp.getAveragePrice()])
 
   // Interestingly oxr provides us with a Bitcoin price from the Coindesk Price
   // Index. However, the oxr free plan only gives us hourly updated rates. We
@@ -68,14 +66,14 @@ function* getRates() {
 }
 exports.getRates = getRates;
 
-function* getSymbols() {
-  let rates = yield* getRates();
+async function getSymbols() {
+  let rates = await getRates();
   return Object.keys(rates);
 }
 exports.getSymbols = getSymbols;
 
-function* convert(from, to, amount) {
-  let rates = yield* getRates();
+async function convert(from, to, amount) {
+  let rates = await getRates();
   fx.rates = rates;
   fx.base  = 'USD';
   return fx(amount).convert({from: from, to: to});

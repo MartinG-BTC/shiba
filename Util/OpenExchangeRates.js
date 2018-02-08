@@ -1,11 +1,11 @@
 'use strict';
 
 const debug   = require('debug')('shiba:oxr');
-const request = require('co-request');
+const request = require('request-promise');
 
 const API     = 'http://openexchangerates.org/api/';
 
-function* getRates(opts, ep) {
+async function getRates(opts, ep) {
   debug('Fetching openexchangerates');
 
   let appId = opts.appId;
@@ -17,20 +17,18 @@ function* getRates(opts, ep) {
   debug('oxr url: %s', url);
 
   // Fetch the data
-  let req = yield request(url);
-  let res = JSON.parse(req.body);
-  if (res.error)
-    throw res;
+  let req = await request(url);
+  let res = JSON.parse(req);
 
   res.timestamp *= 1000;
 
   return res;
 }
 
-exports.getLatest = function*(opts) {
-  return yield* getRates(opts, 'latest.json');
+exports.getLatest = function(opts) {
+  return getRates(opts, 'latest.json');
 };
 
-exports.getHistorical = function*(opts, date) {
-  return yield* getRates(opts, 'historical/' + date + '.json');
+exports.getHistorical = function(opts, date) {
+  return getRates(opts, 'historical/' + date + '.json');
 };

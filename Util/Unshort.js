@@ -1,6 +1,6 @@
 'use strict';
 
-const request  = require('co-request');
+const request  = require('request-promise');
 const debug    = require('debug')('shiba:unshort');
 const Cache    = require('./Cache');
 
@@ -19,19 +19,19 @@ const unshortCache = new Cache({
   // for maximally 10 hours.
   maxAge: 1000 * 60 * 60 * 10,
   load:
-    function*(url) {
+    async function(url) {
       debug("Loading '%s'", url);
-      let opt = {url: url, headers: headers};
-      let res = yield request(opt);
+      let opt = {url: url, headers: headers, resolveWithFullResponse: true };
+      let res = await request(opt);
 
       // Return the URL after following all redirects.
       return res.request.href;
     }
 });
 
-function* unshort(url) {
+async function unshort(url) {
   try {
-    let res = yield* unshortCache.get(url);
+    let res = await unshortCache.get(url);
     debug('Unshortened "%s" -> "%s"', url, res);
     return res;
   } catch(err) {
@@ -41,8 +41,8 @@ function* unshort(url) {
   }
 }
 
-function* unshorts(urls) {
-  return yield urls.map(unshort);
+function unshorts(urls) {
+  return Promise.all(urls.map(unshort))
 }
 
 module.exports.unshort  = unshort;

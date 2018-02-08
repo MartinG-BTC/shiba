@@ -2,8 +2,6 @@
 
 const EventEmitter = require('events').EventEmitter;
 const inherits     = require('util').inherits;
-const request      = require('co-request');
-const wait         = require('co-wait');
 const debug        = require('debug')('shiba:store:game');
 const debugv       = require('debug')('verbose:store:game');
 const Config       = require('../Config');
@@ -21,13 +19,13 @@ function GameStore(store) {
 
 inherits(GameStore, EventEmitter);
 
-GameStore.prototype.addGame = function*(game) {
+GameStore.prototype.addGame = async function(game) {
   debug('Adding game: ' + JSON.stringify(game));
 
   // Try up to 5 times to log the game
   for (let i = 1; i <= 5; ++i) {
     try {
-      yield* Pg.putGame(game);
+      await Pg.putGame(game);
       break;
     } catch(err) {
       console.error(`Failed to log game: ${game.game_id} try: ${i}`);
@@ -42,37 +40,20 @@ GameStore.prototype.addGame = function*(game) {
   this.emit('game', game);
 };
 
-function* getGameInfo(id) {
-  let url = Config.WEBSERVER + '/game/' + id + '.json';
-  let res = yield request(url);
-
-  if (res.statusCode !== 200) {
-    console.error("Got status code:", res.statusCode);
-    console.error("Body:", res.body);
-    throw 'INVALID_STATUSCODE';
-  }
-
-  return JSON.parse(res.body);
-}
-
-GameStore.prototype.importGame = function*(id) {
+GameStore.prototype.importGame = async function(client, id) {
   debug('Importing game: %d', id);
   let info;
   try {
-    info = yield* getGameInfo(id);
+    info = await client.getGameInfo(Number(id))
   } catch(err) {
     console.error('Downloading game #' + id, 'failed');
     throw err;
   }
 
-  info.created = new Date(info.created).getTime();
-  // TODO: move this constant
-  info.startTime = info.created + 5000;
-
   // Try up to 5 times to import the game
   for (let i = 1; i <= 5; ++i) {
     try {
-      yield* Pg.putGame(info);
+      await Pg.putGame(info);
       break;
     } catch(err) {
       if (i == 5) {
@@ -83,34 +64,36 @@ GameStore.prototype.importGame = function*(id) {
   }
 };
 
-GameStore.prototype.fillMissing = function*(data) {
-  debug('Checking for missing games before: %d', data.game_id);
+GameStore.prototype.fillMissing = async function(client) {
+  const { game } = client
+  debug('Checking for missing games before: %d', game.id);
 
-  let maxGameId = data.state === 'ENDED' ? data.game_id : data.game_id - 1;
+  let maxGameId = game.state === 'GAME_ENDED' ? game.id : game.id - 1;
 
   // Get ids of missing games. TODO: move this constants
-  let ids = yield* Pg.getMissingGames(3190000, maxGameId);
+  let ids = await Pg.getMissingGames(1, maxGameId);
 
   // Import them from the web.
   for (let id of ids) {
     debug('Importing missing id: %d', id);
     try {
-      yield* this.importGame(id);
+      await this.importGame(client, id);
     } catch(err) {
       // Message error but continue. Could be an unterminated game.
       console.error('Error while importing game %d:', id, err.stack || err);
     }
-    yield wait(1500);
+    // eslint-disable-next-line promise/avoid-new
+    await new Promise(resolve => setTimeout(resolve, 1500))
   }
 
   // Finally replace the store with the current games. TODO: Yes, there is a
   // race condition here, but this store isn't really used anyway...
-  this.store = yield* Pg.getLastGames();
+  this.store = await Pg.getLastGames();
 };
 
-function* make() {
+async function make() {
   debug('Create game store');
-  let games = yield* Pg.getLastGames();
+  const games = await Pg.getLastGames()
   return new GameStore(games);
 }
 

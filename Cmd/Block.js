@@ -1,6 +1,5 @@
 'use strict';
 
-const co          = require('co');
 const debug       = require('debug')('shiba:cmd:block');
 const debugnotify = require('debug')('shiba:blocknotify');
 const Pg          = require('../Pg');
@@ -9,7 +8,7 @@ const Lib         = require('../Lib');
 
 function CmdBlock(block, blockNotify) {
   this.block       = block;
-  // Map 'channelName': ['user1', 'user2', ...]
+  // Map 'channel': ['user1', 'user2', ...]
   this.blockNotify = blockNotify;
   this.client      = null;
 
@@ -21,7 +20,7 @@ CmdBlock.prototype.setClient = function(client) {
   this.client = client;
 };
 
-CmdBlock.prototype.onBlock = function(block) {
+CmdBlock.prototype.onBlock = async function(block) {
   let newBlock = {
     height: block.height,
     hash: block.hash,
@@ -29,32 +28,33 @@ CmdBlock.prototype.onBlock = function(block) {
     notification: new Date()
   };
 
-  let self = this;
-  co(function*() {
-    yield* Pg.putBlock(newBlock);
+  try {
+    await Pg.putBlock(newBlock);
 
     // Check if block is indeed new and only signal in this case.
-    if (newBlock.height > self.block.height) {
-      self.block = newBlock;
+    if (newBlock.height > this.block.height) {
+      this.block = newBlock;
 
-      if (self.client && self.blockNotify.size > 0) {
-        for (let channelName of self.blockNotify.keys()) {
-          let userList = self.blockNotify.get(channelName);
+      if (this.client && this.blockNotify.size > 0) {
+        for (let channel of this.blockNotify.keys()) {
+          let userList = this.blockNotify.get(channel);
           let users = userList.map(s => '@' + s).join(', ') + ': ';
           let line = users + 'Block #' + newBlock.height + ' mined.';
-          self.client.doSay(line, channelName);
+          this.client.doSay(line, channel);
         }
 
-        self.blockNotify.clear();
-        yield* Pg.clearBlockNotifications();
+        this.blockNotify.clear();
+        await Pg.clearBlockNotifications();
       }
     }
-  }).catch(err => console.error('[ERROR] onBlock:', err));
+  } catch (err) {
+    console.error('[ERROR] onBlock:', err)
+  }
 };
 
 /* eslint no-unused-vars: 0 */
-CmdBlock.prototype.handle = function*(client, msg, input) {
-  debug('Handling cmd block for user: %s', msg.username);
+CmdBlock.prototype.handle = async function(client, msg, input) {
+  debug('Handling cmd block for user: %s', msg.uname);
 
   let time  = this.block.notification;
   let diff  = Date.now() - time;
@@ -68,39 +68,39 @@ CmdBlock.prototype.handle = function*(client, msg, input) {
     line += ' ago.';
   }
 
-  let channel = this.blockNotify.get(msg.channelName);
+  let channel = this.blockNotify.get(msg.channel);
   if (!channel) {
     debugnotify(
       "Creating notification for channel '%s' with user '%s'",
-      msg.channelName, msg.username
+      msg.channel, msg.uname
     );
-    this.blockNotify.set(msg.channelName, [msg.username]);
-    yield* Pg.putBlockNotification(msg.username, msg.channelName);
-  } else if (channel.indexOf(msg.username) < 0) {
+    this.blockNotify.set(msg.channel, [msg.uname]);
+    await Pg.putBlockNotification(msg.uname, msg.channel);
+  } else if (channel.indexOf(msg.uname) < 0) {
     debugnotify(
       "Adding user '%s' to the channel '%s'",
-      msg.username, msg.channelName
+      msg.uname, msg.channel
     );
-    channel.push(msg.username);
-    yield* Pg.putBlockNotification(msg.username, msg.channelName);
+    channel.push(msg.uname);
+    await Pg.putBlockNotification(msg.uname, msg.channel);
   } else {
     debugnotify(
       "Already notifying user '%s' on channel '%s'",
-      msg.username, msg.channelName
+      msg.uname, msg.channel
     );
-    line += ' ' + msg.username + ': Have patience!';
+    line += ' ' + msg.uname + ': Have patience!';
   }
 
-  this.client.doSay(line, msg.channelName);
+  this.client.doSay(line, msg.channel);
 };
 
-function* mkCmdBlock() {
+async function mkCmdBlock() {
   // Last received block information.
-  let block = yield* Pg.getLatestBlock();
+  let block = await Pg.getLatestBlock()
 
   // Awkward name for an array that holds names of users which
   // will be notified when a new block has been mined.
-  let blockNotifyUsers = yield* Pg.getBlockNotifications();
+  let blockNotifyUsers = await Pg.getBlockNotifications()
 
   return new CmdBlock(block, blockNotifyUsers);
 }

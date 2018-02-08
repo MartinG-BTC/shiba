@@ -7,12 +7,12 @@ const Lib        = require('../Lib');
 function Prob() {
 }
 
-Prob.prototype.handle = function*(client, msg, input) {
+Prob.prototype.handle = function(client, msg, input) {
   let qry;
   try {
     qry = BustParser.parse(input);
   } catch(err) {
-    client.doSay('wow. very usage failure. such retry', msg.channelName);
+    client.doSay('wow. very usage failure. such retry', msg.channel);
     return;
   }
 
@@ -38,7 +38,7 @@ Prob.prototype.handle = function*(client, msg, input) {
   let line =
     'Probability of ' + (qry.text || input) +
     ': ' + res.toFixed(6) + '%';
-  client.doSay(line, msg.channelName);
+  client.doSay(line, msg.channel);
 };
 
 module.exports = exports = Prob;

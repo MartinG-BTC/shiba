@@ -1,4 +1,4 @@
-var parser = require('../Convert').parser;
+const { parser } = require("../Cmd/ConvertParser")
 
 function test(str) {
   var res = parser.parse(str);

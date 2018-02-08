@@ -7,14 +7,14 @@ const ExchangeRate  = require('../Util/ExchangeRate');
 function Convert() {
 }
 
-Convert.prototype.handle = function*(client, msg, input) {
+Convert.prototype.handle = async function(client, msg, input) {
   debug('Handling conversion "%s"', input);
   let conv;
   try {
     conv = input.replace(/^\s+|\s+$/g, '');
     conv = ConvertParser.parse(conv);
   } catch(err) {
-    client.doSay('wow. very usage failure. such retry', msg.channelName);
+    client.doSay('wow. very usage failure. such retry', msg.channel);
     throw err;
   }
 
@@ -22,12 +22,12 @@ Convert.prototype.handle = function*(client, msg, input) {
 
   let result;
   try {
-    result = yield* ExchangeRate.convert(
+    result = await ExchangeRate.convert(
       conv.fromiso, conv.toiso, conv.amount);
     result *= modFactor(conv.frommod);
     result /= modFactor(conv.tomod);
   } catch(err) {
-    client.doSay('wow. such exchange rate fail', msg.channelName);
+    client.doSay('wow. such exchange rate fail', msg.channel);
     throw err;
   }
 
@@ -65,7 +65,7 @@ Convert.prototype.handle = function*(client, msg, input) {
   const prettyResult = pretty(conv.toiso, result, conv.tomod);
 
   /* Send everything to the chat. */
-  client.doSay(prettySource + ' is ' + prettyResult, msg.channelName);
+  client.doSay(prettySource + ' is ' + prettyResult, msg.channel);
 };
 
 /* Pretty print an amount. We try to make it as pretty as

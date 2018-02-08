@@ -1,9 +1,11 @@
+CREATE EXTENSION IF NOT EXISTS plv8;
+
+
 CREATE TABLE users (
   id bigserial NOT NULL PRIMARY KEY,
   username text NOT NULL,
   wagered bigint DEFAULT 0 NOT NULL,
   cashed_out bigint DEFAULT 0 NOT NULL,
-  bonused bigint DEFAULT 0 NOT NULL,
   num_played bigint DEFAULT 0 NOT NULL,
   -- The timestamp indicates when we have seen the user for the first time.
   created timestamp with time zone DEFAULT now() NOT NULL
@@ -17,34 +19,17 @@ CREATE TABLE licks (
   created timestamp with time zone DEFAULT now() NOT NULL
 );
 
-CREATE TYPE UserClassEnum AS ENUM ('user', 'moderator', 'admin');
+CREATE TYPE UserClassEnum AS ENUM ('MEMBER', 'TRUSTED', 'ADMIN');
 
 CREATE TABLE chats (
-  id bigserial NOT NULL PRIMARY KEY,
+  id bigint NOT NULL PRIMARY KEY, -- set by server, not us
   user_id bigint NOT NULL REFERENCES users(id),
   channel text NOT NULL,
   message text NOT NULL,
-  is_bot boolean NOT NULL,
+  is_notification boolean NOT NULL,
   created timestamp with time zone DEFAULT now() NOT NULL
 );
 CREATE UNIQUE INDEX unique_chats_user_created ON chats USING btree (user_id, created);
-
-CREATE TABLE mutes (
-  id bigserial NOT NULL PRIMARY KEY,
-  user_id bigint NOT NULL REFERENCES users(id),
-  moderator_id bigint NOT NULL REFERENCES users(id),
-  timespec text NOT NULL,
-  shadow boolean DEFAULT false NOT NULL,
-  created timestamp with time zone DEFAULT now() NOT NULL
-);
-
-CREATE TABLE unmutes (
-  id bigserial NOT NULL PRIMARY KEY,
-  user_id bigint NOT NULL REFERENCES users(id),
-  moderator_id bigint NOT NULL REFERENCES users(id),
-  shadow boolean DEFAULT false NOT NULL,
-  created timestamp with time zone DEFAULT now() NOT NULL
-);
 
 CREATE TABLE games (
   id bigint NOT NULL PRIMARY KEY,
@@ -54,7 +39,6 @@ CREATE TABLE games (
   started timestamp with time zone NULL,
   wagered bigint DEFAULT 0 NOT NULL,
   cashed_out bigint DEFAULT 0 NOT NULL,
-  bonused bigint DEFAULT 0 NOT NULL,
   num_played bigint DEFAULT 0 NOT NULL
 );
 
@@ -63,22 +47,16 @@ CREATE TABLE plays (
   user_id bigint NOT NULL REFERENCES users(id),
   cash_out bigint,
   game_id bigint NOT NULL REFERENCES games(id),
-  bet bigint NOT NULL,
-  bonus bigint,
-  joined timestamp with time zone NULL
+  bet bigint NOT NULL
 );
 
 CREATE INDEX licks_user_id_idx ON licks USING btree (user_id);
 CREATE INDEX licks_creator_id_idx ON licks USING btree (creator_id);
 CREATE INDEX chats_user_id_idx ON chats USING btree (user_id, created DESC);
-CREATE INDEX mutes_user_id_idx ON mutes USING btree (user_id);
-CREATE INDEX mutes_moderator_id_idx ON mutes USING btree (moderator_id);
 CREATE INDEX plays_game_id_idx ON plays USING btree (game_id);
 CREATE INDEX plays_user_id_idx ON plays USING btree (user_id, id DESC);
 CREATE UNIQUE INDEX unique_username ON users USING btree (lower(username));
 CREATE INDEX user_id_idx ON users USING btree (id);
-CREATE INDEX unmutes_user_id_idx ON unmutes USING btree (user_id);
-CREATE INDEX unmutes_moderator_id_idx ON unmutes USING btree (moderator_id);
 CREATE UNIQUE INDEX unique_plays_game_user ON plays USING btree (user_id, game_id);
 
 -- Game crash table
@@ -165,7 +143,6 @@ CREATE TABLE userstats (
   timespan timestamp WITHOUT time zone NOT NULL,
   wagered bigint DEFAULT 0 NOT NULL,
   cashed_out bigint DEFAULT 0 NOT NULL,
-  bonused bigint DEFAULT 0 NOT NULL,
   num_played bigint DEFAULT 0 NOT NULL,
   PRIMARY KEY (user_id, timespan)
 );
@@ -174,7 +151,7 @@ CREATE OR REPLACE FUNCTION plays_userstats_trigger() RETURNS trigger AS $$
   if (TG_OP === 'UPDATE' && OLD.user_id !== NEW.user_id)
     throw new Error('Update of user_id not allowed');
 
-  var userId, wagered = 0, cashedOut = 0, bonused = 0, numPlayed = 0;
+  var userId, wagered = 0, cashedOut = 0, numPlayed = 0;
   var now = new Date();
 
   // Add new values.
@@ -182,7 +159,6 @@ CREATE OR REPLACE FUNCTION plays_userstats_trigger() RETURNS trigger AS $$
     userId     = NEW.user_id;
     wagered   += NEW.bet;
     cashedOut += NEW.cash_out || 0;
-    bonused   += NEW.bonus || 0;
     numPlayed += 1;
   }
 
@@ -191,7 +167,6 @@ CREATE OR REPLACE FUNCTION plays_userstats_trigger() RETURNS trigger AS $$
     userId     = OLD.user_id;
     wagered   -= OLD.bet;
     cashedOut -= OLD.cash_out || 0;
-    bonused   -= OLD.bonus || 0;
     numPlayed -= 1;
   }
 
@@ -203,11 +178,10 @@ CREATE OR REPLACE FUNCTION plays_userstats_trigger() RETURNS trigger AS $$
           "UPDATE userstats " +
           "  SET wagered    = wagered + $1, " +
           "      cashed_out = cashed_out + $2, " +
-          "      bonused    = bonused + $3, " +
-          "      num_played = num_played + $4 " +
-          "  WHERE user_id = $5 " +
-          "  AND timespan = date_trunc('week', $6::timestamp without time zone)",
-          [wagered, cashedOut, bonused, numPlayed, userId, now]
+          "      num_played = num_played + $3 " +
+          "  WHERE user_id = $4 " +
+          "  AND timespan = date_trunc('week', $5::timestamp without time zone)",
+          [wagered, cashedOut, numPlayed, userId, now]
         );
 
         if (numRow > 0)
@@ -216,9 +190,9 @@ CREATE OR REPLACE FUNCTION plays_userstats_trigger() RETURNS trigger AS $$
         // Row doesnt exist, so try to insert it. If someone else inserts
         // the same key concurrently, we could get a unique-key exception.
         plv8.execute(
-          "INSERT INTO userstats(user_id, timespan, wagered, cashed_out, bonused, num_played)" +
-          "  VALUES ($1, date_trunc('week', $2::timestamp without time zone), $3, $4, $5, $6)",
-          [userId, now, wagered, cashedOut, bonused, numPlayed]
+          "INSERT INTO userstats(user_id, timespan, wagered, cashed_out, num_played)" +
+          "  VALUES ($1, date_trunc('week', $2::timestamp without time zone), $3, $4, $5)",
+          [userId, now, wagered, cashedOut, numPlayed]
         );
       });
       // Upserting successful so break out of the loop.
@@ -234,10 +208,9 @@ CREATE OR REPLACE FUNCTION plays_userstats_trigger() RETURNS trigger AS $$
     'UPDATE users ' +
     '  SET wagered    = wagered + $1, ' +
     '      cashed_out = cashed_out + $2, ' +
-    '      bonused    = bonused + $3, ' +
-    '      num_played = num_played + $4 ' +
-    '  WHERE id = $5',
-    [wagered, cashedOut, bonused, numPlayed, userId]
+    '      num_played = num_played + $3 ' +
+    '  WHERE id = $4',
+    [wagered, cashedOut, numPlayed, userId]
   );
 $$ LANGUAGE plv8 VOLATILE;
 
@@ -249,7 +222,6 @@ CREATE TABLE sitestats (
   timespan timestamp WITHOUT time zone NOT NULL,
   wagered bigint DEFAULT 0 NOT NULL,
   cashed_out bigint DEFAULT 0 NOT NULL,
-  bonused bigint DEFAULT 0 NOT NULL,
   num_played bigint DEFAULT 0 NOT NULL,
   PRIMARY KEY (timespan)
 );
@@ -258,14 +230,13 @@ CREATE OR REPLACE FUNCTION games_sitestats_trigger() RETURNS trigger AS $$
   if (TG_OP === 'UPDATE' && OLD.id !== NEW.id)
     throw new Error('Update of game id not allowed');
 
-  var wagered = 0, cashedOut = 0, bonused = 0, numPlayed = 0;
+  var wagered = 0, cashedOut = 0, numPlayed = 0;
   var created = new Date(NEW.created || OLD.created);
 
   // Add new values.
   if (NEW) {
     wagered   += NEW.wagered || 0;
     cashedOut += NEW.cashed_out || 0;
-    bonused   += NEW.bonused || 0;
     numPlayed += NEW.num_played || 0;
   }
 
@@ -273,7 +244,6 @@ CREATE OR REPLACE FUNCTION games_sitestats_trigger() RETURNS trigger AS $$
   if (OLD) {
     wagered   -= OLD.wagered || 0;
     cashedOut -= OLD.cashed_out || 0;
-    bonused   -= OLD.bonused || 0;
     numPlayed -= OLD.num_played || 0;
   }
 
@@ -285,10 +255,9 @@ CREATE OR REPLACE FUNCTION games_sitestats_trigger() RETURNS trigger AS $$
           "UPDATE sitestats " +
           "  SET wagered    = wagered + $1, " +
           "      cashed_out = cashed_out + $2, " +
-          "      bonused    = bonused + $3, " +
-          "      num_played = num_played + $4 " +
-          "  WHERE timespan = date_trunc('hour', $5::timestamp without time zone)",
-          [wagered, cashedOut, bonused, numPlayed, created]
+          "      num_played = num_played + $3 " +
+          "  WHERE timespan = date_trunc('hour', $4::timestamp without time zone)",
+          [wagered, cashedOut, numPlayed, created]
         );
 
         if (numRow > 0)
@@ -297,9 +266,9 @@ CREATE OR REPLACE FUNCTION games_sitestats_trigger() RETURNS trigger AS $$
         // Row doesnt exist, so try to insert it. If someone else inserts
         // the same key concurrently, we could get a unique-key exception.
         plv8.execute(
-          "INSERT INTO sitestats(timespan, wagered, cashed_out, bonused, num_played)" +
-          "  VALUES (date_trunc('hour', $1::timestamp without time zone), $2, $3, $4, $5)",
-          [created, wagered, cashedOut, bonused, numPlayed]
+          "INSERT INTO sitestats(timespan, wagered, cashed_out, num_played)" +
+          "  VALUES (date_trunc('hour', $1::timestamp without time zone), $2, $3, $4)",
+          [created, wagered, cashedOut, numPlayed]
         );
       });
       // Upserting successful so break out of the loop.
@@ -320,17 +289,21 @@ CREATE OR REPLACE FUNCTION userIdOf(text) RETURNS bigint AS $$
   SELECT id FROM users WHERE lower(username) = lower($1)
 $$ LANGUAGE SQL STABLE;
 
+CREATE OR REPLACE FUNCTION usernameOf(bigint) RETURNS text AS $$
+  SELECT username FROM users WHERE id = $1
+$$ LANGUAGE SQL STABLE;
+
 CREATE OR REPLACE FUNCTION
   siteprofittime(timestamp with time zone)
 RETURNS numeric AS $$
   SELECT
     COALESCE((
-      SELECT SUM(wagered) - SUM(cashed_out) - SUM(bonused)
+      SELECT SUM(wagered) - SUM(cashed_out)
       FROM games WHERE created >= $1 AND
        created < date_trunc('hour', $1::timestamp without time zone) +
                    '1 hour'::interval), 0) +
     COALESCE((
-      SELECT SUM(wagered) - SUM(cashed_out) - SUM(bonused)
+      SELECT SUM(wagered) - SUM(cashed_out)
       FROM sitestats WHERE timespan > $1), 0)
 $$ LANGUAGE SQL STABLE;
 

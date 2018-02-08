@@ -29,23 +29,23 @@ function parse(input) {
   }
 }
 
-Median.prototype.handle = function*(client, msg, input) {
+Median.prototype.handle = async function(client, msg, input) {
   debug('Handling median for "%s" games', input);
 
   let nums = parse(input);
   if (nums.length <= 0) {
-    client.doSay('wow. very usage failure. such retry', msg.channelName);
+    client.doSay('wow. very usage failure. such retry', msg.channel);
     return;
   }
 
-  let result   = yield (nums.map(num => Pg.getGameCrashMedian(num)));
+  let result   = await Promise.all(nums.map(num => Pg.getGameCrashMedian(num)));
   nums = nums.join(', ');
   result = result.map(obj => obj.median / 100 + 'x').join(', ');
 
   let response = 'Median over last ' +
         nums + ' games: ' + result;
 
-  client.doSay(response, msg.channelName);
+  client.doSay(response, msg.channel);
 };
 
 module.exports = exports = Median;

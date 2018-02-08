@@ -1,5 +1,5 @@
-node_modules/*
 Cmd/BustParser.js
 Cmd/ConvertParser.js
 Cmd/ProfitParser.js
 Cmd/StreakParser.js
+Cmd/WageredParser.js

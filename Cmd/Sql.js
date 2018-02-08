@@ -8,34 +8,32 @@ function Sql() {
 
 // TODO: Move somewhere else
 function eligible(username, role) {
-  if (role === 'admin')
+  if (role === 'ADMIN')
     return true;
 
-  if (username === 'Shiba' ||
-      username === 'Steve' ||
-      username === 'rapetor' ||
-      username === 'kungfuant' ||
-      username === 'TheManyFacedGod')
-    return true;
-
-  return false;
+  const whitelist = [
+    "kungfuant",
+    "Ryan",
+    "Steve",
+  ]
+  return whitelist.includes(username)
 }
 
-Sql.prototype.handle = function*(client, msg, input) {
-  if (!eligible(msg.username, msg.role))
+Sql.prototype.handle = async function(client, msg, input) {
+  if (!eligible(msg.uname, msg.userKind))
     return;
 
   debug('Running query: %s', input);
 
   try {
-    let result = yield* Pg.query(input, []);
+    const result = await Pg.query(input, []);
     if (result.rows.length > 0)
-      client.doSay(JSON.stringify(result.rows[0]), msg.channelName);
+      client.doSay(JSON.stringify(result.rows[0]), msg.channel);
     else
-      client.doSay('0 rows', msg.channelName);
+      client.doSay('0 rows', msg.channel);
   } catch(e) {
     console.log(e.stack || e);
-    client.doSay(e.toString(), msg.channelName);
+    client.doSay(e.toString(), msg.channel);
   }
 };
 

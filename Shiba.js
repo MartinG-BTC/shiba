@@ -1,7 +1,6 @@
 'use strict';
 
 const _             =  require('lodash');
-const co            =  require('co');
 const fs            =  require('fs');
 const debug         =  require('debug')('shiba');
 const debugautomute =  require('debug')('shiba:automute');
@@ -9,11 +8,10 @@ const debugautomute =  require('debug')('shiba:automute');
 const profanity    =  require('./profanity');
 const Unshort      =  require('./Util/Unshort');
 
-const Config       =  require('./Config');
-const Client       =  require('./GameClient');
-const WebClient    =  require('./WebClient');
-const Lib          =  require('./Lib');
-const Pg           =  require('./Pg');
+const Config         =  require('./Config');
+const BustabitClient =  require('./BustabitClient');
+const Lib            =  require('./Lib');
+const Pg             =  require('./Pg');
 
 const CmdAutomute  =  require('./Cmd/Automute');
 const CmdConvert   =  require('./Cmd/Convert');
@@ -45,85 +43,79 @@ ensureDirSync('chatlogs');
 const cmdReg = /^\s*!([a-zA-z]*)\s*(.*)$/i;
 
 function Shiba() {
-  let self = this;
-
-  co(function*() {
+  (async () => {
     // List of automute regexps
-    self.automuteStore = yield* mkAutomuteStore();
-    self.chatStore     = yield* mkChatStore();
-    self.gameStore     = yield* mkGameStore();
+    this.automuteStore = await mkAutomuteStore()
+    this.chatStore     = await mkChatStore()
+    this.gameStore     = await mkGameStore()
 
-    self.cmdAutomute = new CmdAutomute(self.automuteStore);
-    self.cmdConvert  = new CmdConvert();
-    self.cmdBlock    = yield mkCmdBlock();
-    self.cmdBust     = new CmdBust();
-    self.cmdMedian   = new CmdMedian();
-    self.cmdProb     = new CmdProb();
-    self.cmdProfit   = new CmdProfit();
-    self.cmdSql      = new CmdSql();
-    self.cmdStreak   = new CmdStreak();
-    self.cmdUrban    = new CmdUrban();
-    self.cmdWagered  = new CmdWagered();
+    this.cmdAutomute = new CmdAutomute(this.automuteStore)
+    this.cmdConvert  = new CmdConvert()
+    this.cmdBlock    = await mkCmdBlock()
+    this.cmdBust     = new CmdBust()
+    this.cmdMedian   = new CmdMedian()
+    this.cmdProb     = new CmdProb()
+    this.cmdProfit   = new CmdProfit()
+    this.cmdSql      = new CmdSql()
+    this.cmdStreak   = new CmdStreak()
+    this.cmdUrban    = new CmdUrban()
+    this.cmdWagered  = new CmdWagered()
 
-    // Connect to the game server.
-    self.client = new Client(Config);
+    // Connect to the API server.
+    this.client = new BustabitClient(Config);
 
-    // Connect to the web server.
-    self.webClient = new WebClient(Config);
+    // add missing games
+    this.client.on("connected", () => this.gameStore.fillMissing(this.client))
 
-    // Setup the game bindings.
-    self.client.on('join', co.wrap(function*(data) {
-      yield* self.gameStore.fillMissing(data);
-    }));
-    self.client.on('game_crash', co.wrap(function*(data, gameInfo) {
-      yield* self.gameStore.addGame(gameInfo);
-    }));
+    // record games as they end
+    this.client.on("gameEnded", game => this.gameStore.addGame(game))
+
+    // verify fairness
+    this.client.on("gameEnded", () => {
+      // TODO: ensure game's hash is part of chain
+      const actual = this.client.game.bust
+      const want = Lib.crashPoint(this.client.game.serverSeed, Config.CLIENT_SEED)
+      const tolerance = want >= 1e6 ? 0.08 : 0
+      const fair = Math.abs(want - actual) <= tolerance
+      if (!fair) {
+        this.client.doSay("wow. such scam. very hash failure.", "english")
+      }
+    })
 
     // Setup the chat bindings.
-    self.webClient.on('join', function(data) {
-      co(function*() {
-        yield* self.chatStore.mergeMessages(data.history.reverse());
-      }).catch(function(err) {
-        console.error('Error importing history:', err, err.stack);
-      });
-    });
-    self.webClient.on('msg', function(msg) {
-      co(function*() {
-        yield* self.chatStore.addMessage(msg);
-      }).catch(err => console.error('[ERROR] onMsg:', err.stack));
-    });
-    // Setup a handler for new messages added to the store, so that unseen
-    // messages during a restart are handled properly.
-    self.chatStore.on('msg', co.wrap(function*(msg) {
+    this.client.on("connected", async () => {
+      const history = await this.client.socket.send("joinChannels", require("./chat_channels.json"))
       try {
-        if (msg.type === 'say')
-          yield* self.onSay(msg);
-      } catch(err) {
-        console.err('[Shiba.onMsg]', err && err.stack || err);
+        await this.chatStore.mergeMessages(history)
+      } catch (err) {
+        console.error('Error importing history:', err, err.stack);
       }
-    }));
+    })
+    this.client.socket.on("said", async data => {
+      try {
+        await this.chatStore.addSaid(data)
+      } catch (err) {
+        console.error('[ERROR] on said:', err.stack)
+      }
+    })
+    // handle chat commands
+    this.chatStore.on("msg", async message => {
+      try {
+        await this.onSay(message)
+      } catch (err) {
+        console.error('[Shiba.onMsg]', err && err.stack || err);
+      }
+    })
 
-    self.cmdBlock.setClient(self.webClient);
+    this.cmdBlock.setClient(this.client);
 
-    self.setupScamComment();
-    self.setupChatlogWriter();
-  }).catch(function(err) {
+    this.setupChatlogWriter();
+  })().catch(err => {
     // Abort immediately when an exception is thrown on startup.
-    console.error(err.stack);
-    throw err;
-  });
+    console.error(err.stack)
+    throw err
+  })
 }
-
-Shiba.prototype.setupScamComment = function() {
-  let self = this;
-  self.client.on('game_crash', function(data) { /* eslint no-unused-vars: 0 */
-    let gameInfo = self.client.getGameInfo();
-    console.assert(gameInfo.hasOwnProperty('verified'));
-
-    if (gameInfo.verified !== 'ok')
-      self.webClient.doSay('wow. such scam. very hash failure.', 'english');
-  });
-};
 
 Shiba.prototype.setupChatlogWriter = function() {
   let chatDate    = null;
@@ -149,20 +141,20 @@ Shiba.prototype.setupChatlogWriter = function() {
   });
 };
 
-Shiba.prototype.checkAutomute = function*(msg) {
+Shiba.prototype.checkAutomute = async function(msg) {
   // Don't bother checking messages from the spam channel.
-  if (msg.channelName === 'spam') return false;
+  if (msg.channel === 'spam') return false;
 
   // Match entire message against the regular expressions.
   let automutes = this.automuteStore.get();
   if (automutes.find(r => msg.message.match(r)))
-    return this.webClient.doMute(msg.username, '3h', msg.channelName);
+    return this.client.doMute(msg.uname, "wow. so disrespect. many mute", msg.channel);
 
   // Extract a list of URLs.
   // TODO: The regular expression could be made more intelligent.
   let urls  = msg.message.match(/https?:\/\/[^\s]+/ig) || [];
   let urls2 = msg.message.match(/(\s|^)(bit.ly|vk.cc|goo.gl)\/[^\s]+/ig) || [];
-  urls2     = urls2.map(x => x.replace(/^\s*/, 'http:\/\/'));
+  urls2     = urls2.map(x => x.replace(/^\s*/, 'http://'));
   urls      = urls.concat(urls2);
 
   // No URLs found.
@@ -170,7 +162,7 @@ Shiba.prototype.checkAutomute = function*(msg) {
 
   // Unshorten extracted URLs.
   try {
-    urls2 = yield* Unshort.unshorts(urls);
+    urls2 = await Unshort.unshorts(urls);
     urls  = urls.concat(urls2 || []);
   } catch(e) {
     // Unshort failed. Just continue without it.
@@ -185,50 +177,27 @@ Shiba.prototype.checkAutomute = function*(msg) {
     let automute = automutes.find(r => url.match(r));
     if (automute) {
       debugautomute('URL matched ' + automute);
-      return this.webClient.doMute(msg.username, '6h', msg.channelName);
+      return this.client.doMute(msg.uname, "wow. so disrespect. many mute", msg.channel);
     }
   }
 
   return false;
 };
 
-Shiba.prototype.checkRate = function*(msg) {
-  let rates = [
-    {count: 12, seconds: 1, mute: '12h'},
-    {count: 10, seconds: 1, mute: '9h'},
-    {count: 8, seconds: 1, mute: '6h'},
-    {count: 6, seconds: 1, mute: '30m'},
-    {count: 4, seconds: 1, mute: '15m'},
-    {count: 5, seconds: 3, mute: '15m'},
-    {count: 15, seconds: 20, mute: '15m'}
-  ];
+Shiba.prototype.onSay = async function(msg) {
+  if (msg.uname === this.client.username) return;
 
-  for (let rate of rates) {
-    let after    = new Date(Date.now() - rate.seconds * 1000);
-    let messages = this.chatStore.getChatMessages(msg.username, after);
-
-    if (messages.length > rate.count)
-      return this.webClient.doMute(msg.username, rate.mute, msg.channelName);
-  }
-
-  return false;
-};
-
-Shiba.prototype.onSay = function*(msg) {
-  if (msg.username === this.client.username) return;
-
-  if (yield* this.checkAutomute(msg)) return;
-  if (yield* this.checkRate(msg)) return;
+  if (await this.checkAutomute(msg)) return;
 
   // Everything checked out fine so far. Continue with the command
   // processing phase.
   let cmdMatch = msg.message.match(cmdReg);
-  if (cmdMatch) yield* this.onCmd(msg, cmdMatch[1], _.trim(cmdMatch[2]));
+  if (cmdMatch) await this.onCmd(msg, cmdMatch[1], _.trim(cmdMatch[2]));
 };
 
-Shiba.prototype.checkCmdRate = function*(msg) {
+Shiba.prototype.checkCmdRate = async function(msg) {
   let after    = new Date(Date.now() - 10 * 1000);
-  let messages = this.chatStore.getChatMessages(msg.username, after);
+  let messages = this.chatStore.getChatMessages(msg.uname, after);
 
   let count = 0;
   messages.forEach(m => {
@@ -236,9 +205,9 @@ Shiba.prototype.checkCmdRate = function*(msg) {
   });
 
   if (count >= 5) {
-    return this.webClient.doMute(msg.username, '5m', msg.channelName);
+    return this.client.doMute(msg.uname, "wow. very spam. many mute", msg.channel);
   } else if (count >= 4) {
-    this.webClient.doSay('bites ' + msg.username, msg.channelName);
+    this.client.doSay('bites ' + msg.uname, msg.channel);
     return true;
   }
 
@@ -284,106 +253,104 @@ let cmdBlacklist = [
   'bust', 'convert', 'median', 'prob', 'profit', 'streak', 'urban', 'wagered'
 ];
 
-/* eslint complexity: [2,16] */
-Shiba.prototype.onCmd = function*(msg, cmd, rest) {
+Shiba.prototype.onCmd = async function(msg, cmd, rest) {
   debug('Handling cmd %s', cmd);
 
   // Cmd rate limiter
-  if (yield* this.checkCmdRate(msg)) return;
+  if (await this.checkCmdRate(msg)) return;
 
   // Lookup proper command name or be undefined.
   cmd = mapAlias[cmd.toLowerCase()];
 
   // Check if a blacklisted command is used in the english channel.
-  if (msg.channelName === 'english' &&
+  if (msg.channel === 'english' &&
       cmdBlacklist.indexOf(cmd) >= 0 &&
-      Config.USER_WHITELIST.indexOf(msg.username.toLowerCase()) < 0 &&
-      msg.role !== 'admin' &&
-      msg.role !== 'moderator') {
-    this.webClient.doSay(
-      '@' + msg.username +
+      !Config.USER_WHITELIST.includes(msg.uname.toLowerCase()) &&
+      msg.userKind !== 'ADMIN' &&
+      msg.userKind !== 'TRUSTED') {
+    this.client.doSay(
+      '@' + msg.uname +
         ' Please use the SPAM channel for that command.',
-      msg.channelName
+      msg.channel
     );
     return;
   }
 
-  switch(cmd) {
+  switch(cmd) { // TODO
   case 'automute':
-    yield* this.cmdAutomute.handle(this.webClient, msg, rest);
+    this.cmdAutomute.handle(this.client, msg, rest);
     break;
   case 'block':
-    yield* this.cmdBlock.handle(this.webClient, msg, rest);
+    this.cmdBlock.handle(this.client, msg, rest);
     break;
   case 'bust':
-    yield* this.cmdBust.handle(this.webClient, this.client, msg, rest);
+    this.cmdBust.handle(this.client, msg, rest);
     break;
   case 'convert':
-    yield* this.onCmdConvert(msg, rest);
+    this.onCmdConvert(msg, rest);
     break;
   case 'custom':
-    yield* this.onCmdCustom(msg, rest);
+    this.onCmdCustom(msg, rest);
     break;
   case 'fair':
-    yield* this.onCmdFair(msg, rest);
+    this.onCmdFair(msg, rest);
     break;
   case 'help':
-    yield* this.onCmdHelp(msg, rest);
+    this.onCmdHelp(msg, rest);
     break;
   case 'lick':
-    yield* this.onCmdLick(msg, rest);
+    this.onCmdLick(msg, rest);
     break;
   case 'median':
-    yield* this.cmdMedian.handle(this.webClient, msg, rest);
+    this.cmdMedian.handle(this.client, msg, rest);
     break;
   case 'nyan':
-    yield* this.cmdBust.handle(this.webClient, this.client, msg, '>= 1000');
+    this.cmdBust.handle(this.client, msg, '>= 1000');
     break;
   case 'prob':
-    yield* this.cmdProb.handle(this.webClient, msg, rest);
+    this.cmdProb.handle(this.client, msg, rest);
     break;
   case 'profit':
-    yield* this.cmdProfit.handle(this.webClient, msg, rest);
+    this.cmdProfit.handle(this.client, msg, rest);
     break;
   case 'seen':
-    yield* this.onCmdSeen(msg, rest);
+    this.onCmdSeen(msg, rest);
     break;
   case 'sql':
-    yield* this.cmdSql.handle(this.webClient, msg, rest);
+    this.cmdSql.handle(this.client, msg, rest);
     break;
   case 'streak':
-    yield* this.cmdStreak.handle(this.webClient, msg, rest);
+    this.cmdStreak.handle(this.client, msg, rest);
     break;
   case 'urban':
-    yield* this.cmdUrban.handle(this.webClient, msg, rest);
+    this.cmdUrban.handle(this.client, msg, rest);
     break;
   case 'wagered':
-    yield* this.cmdWagered.handle(this.webClient, msg, rest);
+    this.cmdWagered.handle(this.client, msg, rest);
     break;
-  default:
   }
 };
 
-Shiba.prototype.onCmdHelp = function*(msg, rest) {
-  this.webClient.doSay(
+Shiba.prototype.onCmdHelp = function(msg) {
+  this.client.doSay(
       'very explanation. much insight: ' +
       'https://www.bustabit.com/faq ' +
-      'https://github.com/moneypot/shiba/wiki/', msg.channelName);
+      'https://github.com/moneypot/shiba/wiki/Commands', msg.channel);
 };
 
-Shiba.prototype.onCmdFair = function*(msg, rest) {
-  this.webClient.doSay(
+Shiba.prototype.onCmdFair = function(msg) {
+  this.client.doSay(
       'so fair. very proof: ' +
-      'https://www.bustabit.com/faq#fair', msg.channelName);
+      'https://www.bustabit.com/faq/is-the-game-fair', msg.channel);
 };
 
-Shiba.prototype.onCmdCustom = function*(msg, rest) {
-  if (msg.role !== 'admin' &&
-      msg.role !== 'moderator') return;
+Shiba.prototype.onCmdCustom = async function(msg, rest) {
+  if (msg.userKind !== 'ADMIN' &&
+      msg.userKind !== 'TRUSTED') return;
 
-  let customReg   = /^([a-z0-9_\-]+)\s+(.*)$/i;
+  let customReg   = /^([a-z0-9_-]+)\s+(.*)$/i;
   let customMatch = rest.match(customReg);
-  let doSay       = text => this.webClient.doSay(text, msg.channelName);
+  let doSay       = text => this.client.doSay(text, msg.channel);
 
   if (!customMatch) {
     doSay('wow. very usage failure. such retry');
@@ -395,7 +362,7 @@ Shiba.prototype.onCmdCustom = function*(msg, rest) {
   let customMsg   = customMatch[2];
 
   try {
-    yield* Pg.putLick(customUser, customMsg, msg.username);
+    await Pg.putLick(customUser, customMsg, msg.uname);
     doSay('wow. so cool. very obedient');
   } catch(err) {
     console.error('[ERROR] onCmdCustom:', err.stack);
@@ -403,22 +370,21 @@ Shiba.prototype.onCmdCustom = function*(msg, rest) {
   }
 };
 
-Shiba.prototype.onCmdLick = function*(msg, user) {
+Shiba.prototype.onCmdLick = async function(msg, user) {
   user = user.toLowerCase();
 
   // We're cultivated and don't lick ourselves.
   if (user === this.client.username.toLowerCase()) return;
 
-  let doSay = text => this.webClient.doSay(text, msg.channelName);
+  let doSay = text => this.client.doSay(text, msg.channel);
   if (profanity[user]) {
-    doSay('so trollol. very annoying. such mute');
-    this.webClient.doMute(msg.username, '5m', msg.channelName);
+    this.client.doMute(msg.uname, "so trollol. very annoying. such mute", msg.channel);
     return;
   }
 
   try {
     // Get licks stored in the DB.
-    let data     = yield* Pg.getLick(user);
+    let data     = await Pg.getLick(user);
     let username = data.username;
     let customs  = data.licks;
 
@@ -445,10 +411,10 @@ Shiba.prototype.onCmdLick = function*(msg, user) {
   }
 };
 
-Shiba.prototype.onCmdSeen = function*(msg, user) {
+Shiba.prototype.onCmdSeen = async function(msg, user) {
   user = user.toLowerCase();
 
-  let doSay = text => this.webClient.doSay(text, msg.channelName);
+  let doSay = text => this.client.doSay(text, msg.channel);
   // Make sure the username is valid
   if (Lib.isInvalidUsername(user)) {
     doSay('such name. very invalid');
@@ -456,26 +422,26 @@ Shiba.prototype.onCmdSeen = function*(msg, user) {
   }
 
   // In case a user asks for himself.
-  if (user === msg.username.toLowerCase()) {
-    doSay('go find a mirror @' + msg.username);
+  if (user === msg.uname.toLowerCase()) {
+    doSay('go find a mirror @' + msg.uname);
     return;
   }
 
   // Special treatment of block.
   if (user === 'block') {
-    yield* this.cmdBlock.handle(this.webClient, msg, user);
+    this.cmdBlock.handle(this.client, msg, user);
     return;
   }
 
   // Special treatment of rape.
   if (user === 'rape') {
-    yield* this.cmdBust.handle(this.webClient, this.client, msg, '< 1.05');
+    this.cmdBust.handle(this.client, msg, '< 1.05');
     return;
   }
 
   // Special treatment of nyan.
   if (user === 'nyan') {
-    yield* this.cmdBust.handle(this.webClient, this.client, msg, '>= 1000');
+    this.cmdBust.handle(this.client, msg, '>= 1000');
     return;
   }
 
@@ -486,14 +452,13 @@ Shiba.prototype.onCmdSeen = function*(msg, user) {
   }
 
   if (profanity[user]) {
-    doSay('so trollol. very annoying. such mute');
-    this.webClient.doMute(msg.username, '5m', msg.channelName);
+    this.client.doMute(msg.uname, "so trollol. very annoying. such mute", msg.channel);
     return;
   }
 
   let message;
   try {
-    message = yield* Pg.getLastSeen(user);
+    message = await Pg.getLastSeen(user);
   } catch(err) {
     if (err === 'USER_DOES_NOT_EXIST') {
       doSay('very stranger. never seen');
@@ -513,17 +478,17 @@ Shiba.prototype.onCmdSeen = function*(msg, user) {
   let diff = Date.now() - message.time;
   let line;
   if (diff < 1000) {
-    line = 'Seen ' + message.username + ' just now.';
+    line = 'Seen ' + message.uname + ' just now.';
   } else {
-    line = 'Seen ' + message.username + ' ';
+    line = 'Seen ' + message.uname + ' ';
     line += Lib.formatTimeDiff(diff);
     line += ' ago.';
   }
   doSay(line);
 };
 
-Shiba.prototype.onCmdConvert = function*(msg, conv) {
-  yield* this.cmdConvert.handle(this.webClient, msg, conv);
+Shiba.prototype.onCmdConvert = function(msg, conv) {
+  this.cmdConvert.handle(this.client, msg, conv);
 };
 
-let shiba = new Shiba();
+new Shiba()

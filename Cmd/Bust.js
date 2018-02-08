@@ -8,12 +8,12 @@ const Pg          = require('../Pg');
 function Bust() {
 }
 
-Bust.prototype.handle = function*(chatClient, gameClient, msg, input) {
+Bust.prototype.handle = async function(client, msg, input) {
   let qry;
   try {
     qry = BustParser.parse(input);
   } catch(err) {
-    chatClient.doSay('wow. very usage failure. such retry', msg.channelName);
+    client.doSay('wow. very usage failure. such retry', msg.channel);
     return;
   }
 
@@ -21,18 +21,18 @@ Bust.prototype.handle = function*(chatClient, gameClient, msg, input) {
 
   let res;
   try {
-    res = yield* Pg.getBust(qry);
+    res = await Pg.getBust(qry);
   } catch(err) {
     console.error('[ERROR] onCmdBust', err.stack);
-    chatClient.doSay('wow. such database fail', msg.channelName);
+    client.doSay('wow. such database fail', msg.channel);
     return;
   }
 
   // Assume that we have never seen this crashpoint.
   if (res.length === 0) {
-    chatClient.doSay(
+    client.doSay(
       'wow. such absence. never seen' + (qry.text || input),
-      msg.channelName
+      msg.channel
     );
     return;
   }
@@ -40,14 +40,14 @@ Bust.prototype.handle = function*(chatClient, gameClient, msg, input) {
   res = res[0];
   let time = new Date(res.created);
   let diff = Date.now() - time;
-  let info = gameClient.getGameInfo();
+  const { id } = client.game
   let line =
     'Seen ' + Lib.formatFactorShort(res.game_crash) +
     ' in #' + res.id +
-    '. ' + (info.game_id - res.id) +
+    '. ' + (id - res.id) +
     ' games ago (' + Lib.formatTimeDiff(diff) +
     ')';
-  chatClient.doSay(line, msg.channelName);
+  client.doSay(line, msg.channel);
 };
 
 module.exports = exports = Bust;

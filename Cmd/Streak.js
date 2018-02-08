@@ -2,7 +2,6 @@
 
 const debug        = require('debug')('shiba:cmd:streak');
 const StreakParser = require('./StreakParser').parser;
-const Lib          = require('../Lib');
 const Pg           = require('../Pg');
 
 const MAX_NUM_GAMES = 8;
@@ -10,29 +9,29 @@ const MAX_NUM_GAMES = 8;
 function Streak() {
 }
 
-Streak.prototype.handle = function*(client, msg, input) {
+Streak.prototype.handle = async function(client, msg, input) {
   debug('Handling streak: %s', JSON.stringify(input));
 
   let streak;
   try {
     streak = StreakParser.parse(input.replace(/^\s+|\s+$/g, ''));
   } catch(err) {
-    client.doSay('wow. very usage failure. such retry', msg.channelName);
+    client.doSay('wow. very usage failure. such retry', msg.channel);
     throw err;
   }
 
   let result;
   try {
     result = streak.count ?
-      yield* Pg.getLastStreak(streak.count, streak.op, streak.bound) :
-      yield* Pg.getMaxStreak(streak.op, streak.bound);
+      await Pg.getLastStreak(streak.count, streak.op, streak.bound) :
+      await Pg.getMaxStreak(streak.op, streak.bound);
   } catch(err) {
-    client.doSay('wow. such database fail', msg.channelName);
+    client.doSay('wow. such database fail', msg.channel);
     throw err;
   }
 
   if (result.length === 0) {
-    client.doSay('never seen such streak', msg.channelName);
+    client.doSay('never seen such streak', msg.channel);
     return;
   }
 
@@ -41,7 +40,7 @@ Streak.prototype.handle = function*(client, msg, input) {
   let end = result[numGames - 1].game_id;
   let crashes = result
                   .slice(0, MAX_NUM_GAMES)
-                  .map(game => Lib.formatFactor(game.game_crash) + 'x')
+                  .map(game => game.game_crash.toFixed(2) + 'x')
                   .join(', ');
   let response =
     'Seen ' + numGames + ' streak in games #' +
@@ -50,7 +49,7 @@ Streak.prototype.handle = function*(client, msg, input) {
   if (numGames > MAX_NUM_GAMES)
     response += ', ...';
 
-  client.doSay(response, msg.channelName);
+  client.doSay(response, msg.channel);
 };
 
 module.exports = exports = Streak;

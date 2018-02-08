@@ -11,11 +11,11 @@ function Automute(store) {
   this.store = store;
 }
 
-Automute.prototype.add = function*(username, regexp) {
+Automute.prototype.add = async function(username, regexp) {
   debug('Adding automute: ' + regexp);
   console.assert(regexp instanceof RegExp);
 
-  yield* Pg.addAutomute(username, regexp);
+  await Pg.addAutomute(username, regexp);
   this.store.push(regexp);
 };
 
@@ -23,9 +23,9 @@ Automute.prototype.get = function() {
   return this.store;
 };
 
-function* make() {
+async function make() {
   debug('Create automute store');
-  return new Automute(yield* Pg.getAutomutes());
+  return new Automute(await Pg.getAutomutes())
 }
 
 module.exports = exports = make;

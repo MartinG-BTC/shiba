@@ -3,20 +3,14 @@
 const crypto =  require('crypto');
 
 module.exports = {
-  sha256:
-    function(data) {
-      let hash = crypto.createHash('sha256');
-      hash.update(data);
-      return hash.digest('hex');
-    },
   isInvalidUsername:
     /* eslint no-multi-spaces: 0 */
     function(input) {
       if (typeof input !== 'string')      return 'NOT_STRING';
       if (input.length === 0)             return 'NOT_PROVIDED';
       if (input.length < 3)               return 'TOO_SHORT';
-      if (input.length > 50)              return 'TOO_LONG';
-      if (!/^[a-z0-9_\-]*$/i.test(input)) return 'INVALID_CHARS';
+      if (input.length > 20)              return 'TOO_LONG';
+      if (!/^[a-z0-9_-]*$/i.test(input))  return 'INVALID_CHARS';
       if (input === '__proto__')          return 'INVALID_CHARS';
       return false;
     },
@@ -57,17 +51,11 @@ module.exports = {
       }
       return words.join(' ');
     },
-  formatFactor:
-    function(f) {
-      return (f / 100).toFixed(2);
-    },
   formatFactorShort:
     function(factor) {
       if (factor === 0) return '0';
 
-      // Scale the factor upfront. We could do that later to preserve
-      // precision, but the code is obfuscated enough already.
-      let f = factor / 100;
+      let f = factor / 100
 
       // Calculate the exponent that would be used in scientific
       // notation. We apply some selective rounding to overcome
@@ -128,56 +116,34 @@ module.exports = {
       let c = 16666.66666667;
       return c * Math.log(0.01 * result);
     },
-  divisible:
-    function(hash, mod) {
-      /* Reduce the hash digit by digit to stay in the signed 32-bit integer range. */
-      let val = hash.split('').reduce(
-        (r, d) => ((r << 4) + parseInt(d, 16)) % mod, 0);
-      return val === 0;
-    },
-  clientSeed:
-    '000000000000000007a9a31ff7f07463d91af6b5454241d5faf282e5e0fe1b3a',
   crashPoint:
-    function(serverSeed) {
-      console.assert(typeof serverSeed === 'string');
-      let hash =
-        crypto
-          .createHmac('sha256', serverSeed)
-          .update(this.clientSeed)
-          .digest('hex');
+    function(seed, clientSeed) {
+      console.assert(typeof seed === 'string');
+      seed = Buffer.from(seed, "hex")
 
-      // In 1 of 101 games the game crashes instantly.
-      if (this.divisible(hash, 101))
-        return 0;
+      const nBits = 52 // number of most significant bits to use
 
-      // Use the most significant 52-bit from the hash to calculate the crash point
-      let h = parseInt(hash.slice(0, 52 / 4), 16);
-      let e = Math.pow(2, 52);
+      // 1. HMAC_SHA256(key=salt, message=seed)
+      const hmac = crypto.createHmac("sha256", clientSeed)
+      hmac.update(seed)
+      seed = hmac.digest("hex")
 
-      return Math.floor((100 * e - h) / (e - h));
+      // 2. r = 52 most significant bits
+      seed = seed.slice(0, nBits/4)
+      const r = parseInt(seed, 16)
+
+      // 3. X = r / 2^52
+      let X = r / Math.pow(2, nBits) // uniformly distributed in [0; 1)
+
+      // 4. X = 99 / (1-X)
+      X = 99 / (1 - X)
+
+      // 5. return max(trunc(X), 100)
+      const result = Math.floor(X)
+      return Math.max(1, result / 100)
     },
   winProb:
     function(factor) {
-      return 9900 / (101 * (factor - 1));
+      return 99 / factor
     },
-  houseEdge:
-    function(factor) {
-      let p1, p2, p3;
-      let v1, v2, v3;
-
-      // Instant crash.
-      p1 = 1 / 101;
-      v1 = 1;
-
-      // Player win.
-      p2 = this.winProb(factor);
-      v2 = -0.01 - (factor - 100) / 100;
-
-      // Player loss.
-      p3 = 1 - p1 - p2;
-      v3 = 0.99;
-
-      // Expected value.
-      return p1 * v1 + p2 * v2 + p3 * v3;
-    }
 };

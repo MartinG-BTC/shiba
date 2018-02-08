@@ -1,7 +1,7 @@
 'use strict';
 
 const debug = require('debug')('shiba:cmd:urban');
-const request = require('co-request');
+const request = require('request-promise');
 const wrap = require('word-wrap');
 const _ = require('lodash');
 
@@ -11,7 +11,7 @@ const WRAP_OPT  = {width: 495, trim: true, indent:''};
 function Urban() {
 }
 
-function* define(term) {
+async function define(term) {
   debug('Fetching definition');
 
   // Compose the final URL.
@@ -19,8 +19,8 @@ function* define(term) {
   debug('ud url: %s', url);
 
   // Fetch the data
-  let req = yield request(url);
-  let res = JSON.parse(req.body);
+  let req = await request(url);
+  let res = JSON.parse(req);
 
   return res;
 }
@@ -29,22 +29,22 @@ function layout(text) {
   return _.split(wrap(text.replace(/\s+/g, " "), WRAP_OPT), '\n');
 }
 
-Urban.prototype.handle = function*(client, msg, input) {
+Urban.prototype.handle = async function(client, msg, input) {
 
   let result;
   try {
-    result = yield* define(input);
+    result = await define(input);
     if (!result || !result.result_type) {
-      client.doSay('wow. such dictionary fail. very concerning', msg.channelName);
+      client.doSay('wow. such dictionary fail. very concerning', msg.channel);
       return;
     }
   } catch(e) {
     console.log(e.stack || e);
-    client.doSay(e.toString(), msg.channelName);
+    client.doSay(e.toString(), msg.channel);
   }
 
   switch(result.result_type) {
-  case 'exact':
+  case 'exact': {
     let entry = result.list[0];
 
     // Keep track how much we said.
@@ -55,14 +55,14 @@ Urban.prototype.handle = function*(client, msg, input) {
 
     for (let line of defLines) {
       if (numChars + line.length <= 800) {
-        client.doSay(line, msg.channelName);
+        client.doSay(line, msg.channel);
         numChars += line.length;
       } else {
         const url =
           'http://urbandictionary.com/define.php?term=' +
           encodeURIComponent(input);
-        client.doSay(line + ' ...', msg.channelName);
-        client.doSay('Full definition: ' + url, msg.channelName);
+        client.doSay(line + ' ...', msg.channel);
+        client.doSay('Full definition: ' + url, msg.channel);
         return;
       }
     }
@@ -77,12 +77,13 @@ Urban.prototype.handle = function*(client, msg, input) {
     // Only say it if it's not too long.
     if (numChars + exampleLength <= 800) {
       for (let line of exampleLines)
-        client.doSay(line, msg.channelName);
+        client.doSay(line, msg.channel);
     }
 
     break;
+  }
   case 'no_results':
-    client.doSay('such lolcat. speak doge ffs!', msg.channelName);
+    client.doSay('such lolcat. speak doge ffs!', msg.channel);
     break;
   default:
     console.log('UD returned', result);

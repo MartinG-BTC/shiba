@@ -7,23 +7,23 @@ const Pg            = require('../Pg');
 function Wagered() {
 }
 
-Wagered.prototype.handle = function*(client, msg, rawInput) {
+Wagered.prototype.handle = async function(client, msg, rawInput) {
   debug('Handling wagered: %s', JSON.stringify(rawInput));
 
   let input;
   try {
     input = WageredParser.parse(rawInput.replace(/^\s+|\s+$/g, ''));
   } catch(err) {
-    client.doSay('wow. very usage failure. such retry', msg.channelName);
+    client.doSay('wow. very usage failure. such retry', msg.channel);
     throw err;
   }
 
   let result = input.time ?
-    yield* Pg.getWageredTime(input.time) :
-    yield* Pg.getWageredGames(input.games);
+    await Pg.getWageredTime(input.time) :
+    await Pg.getWageredGames(input.games);
   let response = (result / 100).toFixed(2) + ' bits';
 
-  client.doSay(response, msg.channelName);
+  client.doSay(response, msg.channel);
 };
 
 module.exports = exports = Wagered;
