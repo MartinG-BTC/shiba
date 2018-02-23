@@ -40,7 +40,7 @@ Streak.prototype.handle = async function(client, msg, input) {
   let end = result[numGames - 1].game_id;
   let crashes = result
                   .slice(0, MAX_NUM_GAMES)
-                  .map(game => game.game_crash.toFixed(2) + 'x')
+                  .map(game => (game.game_crash/100).toFixed(2) + 'x')
                   .join(', ');
   let response =
     'Seen ' + numGames + ' streak in games #' +
