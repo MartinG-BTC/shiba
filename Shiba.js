@@ -478,9 +478,9 @@ Shiba.prototype.onCmdSeen = async function(msg, user) {
   let diff = Date.now() - message.time;
   let line;
   if (diff < 1000) {
-    line = 'Seen ' + message.uname + ' just now.';
+    line = 'Seen ' + message.username + ' just now.';
   } else {
-    line = 'Seen ' + message.uname + ' ';
+    line = 'Seen ' + message.username + ' ';
     line += Lib.formatTimeDiff(diff);
     line += ' ago.';
   }
