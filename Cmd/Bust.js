@@ -38,7 +38,7 @@ Bust.prototype.handle = async function(client, msg, input) {
   }
 
   res = res[0];
-  let time = new Date(res.created);
+  let time = new Date(res.started);
   let diff = Date.now() - time;
   const { id } = client.game
   let line =
