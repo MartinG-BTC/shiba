@@ -14,7 +14,8 @@ function eligible(username, role) {
   const whitelist = [
     "kungfuant",
     "Ryan",
-    "Steve",
+    "MartinG",
+    "Daniel"
   ]
   return whitelist.includes(username)
 }
