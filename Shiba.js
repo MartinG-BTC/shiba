@@ -204,6 +204,8 @@ Shiba.prototype.checkCmdRate = async function(msg) {
     if (m.message.match(cmdReg)) ++count;
   });
 
+  debug('checkCmdRate', msg, messages.length, count);
+
   if (count >= 5) {
     return this.client.doMute(msg.uname, "wow. very spam. many mute", msg.channel);
   } else if (count >= 4) {
