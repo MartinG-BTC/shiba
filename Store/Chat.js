@@ -57,12 +57,12 @@ ChatStore.prototype.addSaid = async function(msg) {
 ChatStore.prototype.getChatMessages = function(username, after) {
   let messages = [];
   for (let msg of this.store) {
-    let then = new Date(msg.date);
+    let then = new Date(msg.created);
 
-      debug('getChatMessages', msg.date, msg.uname, msg.type, username, after, then);
+      //debug('getChatMessages', msg.date, msg.uname, msg.type, username, after, then);
 
     if (after <= then &&
-        msg.type === 'say' &&
+        msg.isNotification === false &&
         msg.uname === username)
       messages.push(msg);
   }
