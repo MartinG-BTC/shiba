@@ -59,6 +59,8 @@ ChatStore.prototype.getChatMessages = function(username, after) {
   for (let msg of this.store) {
     let then = new Date(msg.date);
 
+      debug('getChatMessages', msg.date, msg.uname, msg.type, username, after, then);
+
     if (after <= then &&
         msg.type === 'say' &&
         msg.uname === username)
